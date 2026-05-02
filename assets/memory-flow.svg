@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 220" width="700" height="220">
+  <defs>
+    <linearGradient id="flowGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#14C290"/>
+      <stop offset="50%" style="stop-color:#4C72DB"/>
+      <stop offset="100%" style="stop-color:#ff6b35"/>
+    </linearGradient>
+  </defs>
+  <rect width="700" height="220" fill="#0a0a0f"/>
+
+  <text x="350" y="25" font-family="monospace" font-size="14" font-weight="bold" fill="#14C290" text-anchor="middle">Memory Flow</text>
+
+  <!-- Step 1: Add Memory -->
+  <rect x="20" y="45" width="130" height="80" rx="8" fill="#1a1a2e" stroke="#14C290" stroke-width="1.5"/>
+  <text x="85" y="68" font-family="monospace" font-size="12" fill="#14C290" text-anchor="middle">1. ADD</text>
+  <text x="85" y="86" font-family="monospace" font-size="9" fill="#8888aa" text-anchor="middle">title, content,</text>
+  <text x="85" y="100" font-family="monospace" font-size="9" fill="#8888aa" text-anchor="middle">type, tags...</text>
+  <text x="85" y="118" font-family="monospace" font-size="9" fill="#14C290" text-anchor="middle">↓</text>
+
+  <!-- Arrow 1-2 -->
+  <line x1="150" y1="85" x2="180" y2="85" stroke="url(#flowGrad)" stroke-width="2"/>
+  <polygon points="178,80 190,85 178,90" fill="#4C72DB"/>
+
+  <!-- Step 2: Embed -->
+  <rect x="190" y="45" width="130" height="80" rx="8" fill="#1a1a2e" stroke="#4C72DB" stroke-width="1.5"/>
+  <text x="255" y="68" font-family="monospace" font-size="12" fill="#4C72DB" text-anchor="middle">2. EMBED</text>
+  <text x="255" y="86" font-family="monospace" font-size="9" fill="#8888aa" text-anchor="middle">Ollama</text>
+  <text x="255" y="100" font-family="monospace" font-size="9" fill="#8888aa" text-anchor="middle">nomic-embed-text</text>
+  <text x="255" y="118" font-family="monospace" font-size="9" fill="#4C72DB" text-anchor="middle">↓</text>
+
+  <!-- Arrow 2-3 -->
+  <line x1="320" y1="85" x2="350" y2="85" stroke="url(#flowGrad)" stroke-width="2"/>
+  <polygon points="348,80 360,85 348,90" fill="#ff6b35"/>
+
+  <!-- Step 3: Store -->
+  <rect x="360" y="45" width="130" height="80" rx="8" fill="#1a1a2e" stroke="#ff6b35" stroke-width="1.5"/>
+  <text x="425" y="68" font-family="monospace" font-size="12" fill="#ff6b35" text-anchor="middle">3. STORE</text>
+  <text x="425" y="86" font-family="monospace" font-size="9" fill="#8888aa" text-anchor="middle">Chroma</text>
+  <text x="425" y="100" font-family="monospace" font-size="9" fill="#8888aa" text-anchor="middle">collection.add()</text>
+  <text x="425" y="118" font-family="monospace" font-size="9" fill="#ff6b35" text-anchor="middle">↓</text>
+
+  <!-- Arrow 3-4 -->
+  <line x1="490" y1="85" x2="520" y2="85" stroke="#14C290" stroke-width="2"/>
+  <polygon points="518,80 530,85 518,90" fill="#14C290"/>
+
+  <!-- Step 4: Query -->
+  <rect x="530" y="45" width="150" height="80" rx="8" fill="#1a1a2e" stroke="#14C290" stroke-width="1.5"/>
+  <text x="605" y="68" font-family="monospace" font-size="12" fill="#14C290" text-anchor="middle">4. QUERY</text>
+  <text x="605" y="86" font-family="monospace" font-size="9" fill="#8888aa" text-anchor="middle">semantic search</text>
+  <text x="605" y="100" font-family="monospace" font-size="9" fill="#8888aa" text-anchor="middle">top-k results</text>
+  <text x="605" y="118" font-family="monospace" font-size="9" fill="#8888aa" text-anchor="middle">by distance</text>
+
+  <!-- Bottom: inject_context -->
+  <rect x="180" y="150" width="340" height="55" rx="8" fill="#1a1a2e" stroke="#333355" stroke-width="1"/>
+  <text x="350" y="172" font-family="monospace" font-size="12" fill="#ffffff" text-anchor="middle">inject_context(query, session_context, top_k)</text>
+  <text x="350" y="192" font-family="monospace" font-size="10" fill="#8888aa" text-anchor="middle">→ formatted prompt block for LLM injection</text>
+</svg>
