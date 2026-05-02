@@ -1,4 +1,3 @@
----
 <p align="center">
   <img src="assets/secbrain.png" style="width: 60%; height: auto;">
 </p>
@@ -16,23 +15,11 @@
 
 </div>
 
----
-
 # secbrain: RAG-Powered Cognitive Memory for AI Agents
 
 ## News
 - [2026-05] **secbrain v0.1.0** released with Chroma + Ollama integration, semantic memory retrieval, MCP server for Claude Code, and 30 demo memories ingested.
 - [2026-04] Initial commit — secbrain architecture established with file-based memory and retrieval layer planning.
-
-<div align="center">
-<a href="https://www.star-history.com/#onchain3r/secbrain&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=onchain3r/secbrain&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=onchain3r/secbrain&type=Date" />
-   <img alt="secbrain Star History" src="https://api.star-history.com/svg?repos=onchain3r/secbrain&type=Date" style="width: 80%; height: auto;" />
- </picture>
-</a>
-</div>
 
 > secbrain provides long-term memory and semantic recall for AI coding agents. Store decisions, patterns, lessons, and architecture notes — then query them naturally when context is relevant.
 
@@ -45,10 +32,6 @@
 ## secbrain Architecture
 
 secbrain is built around a retrieval-augmented generation (RAG) pipeline that gives AI agents persistent, queryable memory.
-
-<p align="center">
-  <img src="assets/schema.png" style="width: 100%; height: auto;">
-</p>
 
 ### Core Components
 
@@ -67,10 +50,6 @@ Each memory entry contains:
 - `tags` — Optional categorization tags
 - `source_project` — Optional project context (defaults to `secbrain`)
 - `embedding` — Generated automatically via Ollama
-
-<p align="center">
-  <img src="assets/memory-flow.png" width="80%" style="display: inline-block; margin: 0 2%;">
-</p>
 
 ## Installation
 
