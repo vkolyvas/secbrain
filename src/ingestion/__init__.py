@@ -1,0 +1,1 @@
+# Ingestion layer - Obsidian and session parsing
