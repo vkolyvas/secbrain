@@ -3,6 +3,19 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue.svg?style=for-the-badge" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/MCP-Server-ff6b35.svg?style=for-the-badge" alt="MCP Server">
+  <img src="https://img.shields.io/badge/Embeddings-Ollama-14C290.svg?style=for-the-badge" alt="Ollama Embeddings">
+  <img src="https://img.shields.io/badge/Vector%20Store-Chroma-4C72DB.svg?style=for-the-badge" alt="Chroma">
+  <img src="https://img.shields.io/badge/Memory-RAG-9b59b6.svg?style=for-the-badge" alt="RAG Memory">
+</p>
+
+<p align="center">
+  <a href="https://www.linkedin.com/in/vasiliskolyvasmsc" target="_blank"><img src="https://img.shields.io/badge/LinkedIn-Vasilis%20Kolyvas-0077b5?logo=linkedin&style=for-the-badge" alt="LinkedIn"></a>
+  <a href="https://github.com/onchain3r/secbrain" target="_blank"><img src="https://img.shields.io/badge/GitHub-secbrain-14C290?logo=github&style=for-the-badge" alt="GitHub"></a>
+</p>
+
+<p align="center">
   <strong>RAG-based cognitive memory system for AI agents — persistent, retrievable knowledge layer powered by Chroma, Ollama, and MCP.</strong>
 </p>
 
