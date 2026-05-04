@@ -1,115 +1,109 @@
 """
 MCP server for secbrain memory retrieval.
 Supports both stdio and HTTP/SSE transport.
+
+Architecture: stateless router + explicit project context model + identity registry.
+No global state, no hardcoded paths, no Python-level store caching.
+Each request carries project_id. Store is resolved per-request via registry.
 """
 import argparse
 import asyncio
 import sys
-from enum import Enum
+from pathlib import Path
 from typing import Optional
+
+from pydantic import BaseModel
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent, InitializedNotification
+from mcp.types import Tool, TextContent
 
 from secbrain.config import DEFAULT_TOP_K
-from secbrain.storage.chroma_store import get_store
+from secbrain.mcp.registry import ProjectRegistry, get_registry
 
 
-# Server instance
-server = Server("secbrain-memory")
+# ────────────────────────────────────────────────────────────────
+# Project Context (explicit contract)
+# ────────────────────────────────────────────────────────────────
+
+class ProjectContext(BaseModel):
+    """Every request MUST carry explicit project context."""
+    project_id: str
 
 
-class SystemState(Enum):
-    STARTING = 1
-    READY = 2
-    DEGRADED = 3
-    FAILED = 4
+# ────────────────────────────────────────────────────────────────
+# Project Resolver (uses registry for decoupled identity)
+# ────────────────────────────────────────────────────────────────
 
-
-# System state - transitioned explicitly after full validation
-_state = SystemState.STARTING
-_state_lock = asyncio.Lock()
-
-
-def _set_state(new_state: SystemState):
-    global _state
-    _state = new_state
-
-
-def _get_state() -> SystemState:
-    return _state
-
-
-async def _on_initialized(notification: InitializedNotification):
-    """Called when client sends the initialized notification after handshake."""
-    print("[secbrain] client initialization complete", file=sys.stderr)
-
-
-# Register the notification handler directly on the dict
-server.notification_handlers[InitializedNotification] = _on_initialized
-
-
-def _validate_store_sync() -> bool:
+class ProjectResolver:
     """
-    Actively validate store by testing write + query paths.
-    This runs at startup and validates the full embedding pipeline.
-    Returns True only if store is fully operational.
+    Resolves project_id to filesystem path via registry.
+    Registry is sole source of truth — no fallback.
+    Unregistered project_ids fail explicitly.
     """
-    try:
-        store = get_store()
-        test_content = "health check validation"
 
-        # Test write path
-        memory_id = store.add_memory(
-            content=test_content,
-            memory_type="pattern",
-            title="healthcheck",
-            source_file="system",
-            tags=["__healthcheck__"],
+    BASE_DIR = Path.home() / ".claude" / "projects"
+
+    def __init__(self):
+        self.registry: ProjectRegistry = get_registry()
+
+    def resolve(self, ctx: ProjectContext) -> Path:
+        path = self.registry.resolve(ctx.project_id)
+        if path is None:
+            raise ValueError(f"Unregistered project_id: {ctx.project_id}. Register with register_project() first.")
+        return path
+
+
+# ────────────────────────────────────────────────────────────────
+# Store Factory (pure factory - no Python-level caching)
+# ────────────────────────────────────────────────────────────────
+
+class StoreFactory:
+    """
+    Creates ChromaStore instances per request.
+    No Python-level caching - Chroma handles internal persistence.
+    """
+
+    def create(self, project_path: Path):
+        from secbrain.storage.chroma_store import ChromaStore
+        from secbrain.config import COLLECTION_NAME
+
+        return ChromaStore(
+            path=project_path / "chroma",
+            collection_name=COLLECTION_NAME,
         )
 
-        # Test query path (forces embedding + retrieval)
-        results = store.query(query_text="health check validation", top_k=1)
 
-        # Cleanup
-        store.delete(memory_id)
+# ────────────────────────────────────────────────────────────────
+# MCP Router (stateless resolver)
+# ────────────────────────────────────────────────────────────────
 
-        # Verify we got a meaningful result
-        return len(results) >= 0  # store handled it without exception
-    except Exception as e:
-        print(f"[secbrain] store validation failed: {e}", file=sys.stderr)
-        return False
-
-
-async def validate_store() -> bool:
-    """Async wrapper for store validation."""
-    return await asyncio.get_event_loop().run_in_executor(None, _validate_store_sync)
-
-
-async def initialize_store():
+class MCPRouter:
     """
-    Initialize store with active validation.
-    Transitions state to READY only after full validation passes.
+    Routes MCP requests to the correct project-scoped store.
+    Stateless: no cache, no registry, no shared state.
     """
-    global _store_ready
-    async with _state_lock:
-        _set_state(SystemState.STARTING)
-        print("[secbrain] initializing store with active validation...", file=sys.stderr)
 
-        if await validate_store():
-            _set_state(SystemState.READY)
-            _store_ready = True
-            print("[secbrain] store ready (validated)", file=sys.stderr)
-        else:
-            _set_state(SystemState.FAILED)
-            _store_ready = False
-            print("[secbrain] store FAILED validation", file=sys.stderr)
+    def __init__(self):
+        self.resolver = ProjectResolver()
+        self.factory = StoreFactory()
+
+    def resolve_store(self, ctx: ProjectContext):
+        project_path = self.resolver.resolve(ctx)
+        return self.factory.create(project_path)
 
 
-_store_ready = False
+# ────────────────────────────────────────────────────────────────
+# Server instance (stateless)
+# ────────────────────────────────────────────────────────────────
 
+server = Server("secbrain-memory")
+router = MCPRouter()
+
+
+# ────────────────────────────────────────────────────────────────
+# Tool definitions (all require project_id)
+# ────────────────────────────────────────────────────────────────
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
@@ -117,10 +111,16 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="health_check",
-            description="Check system readiness - returns MCP protocol status, store status, and index availability.",
+            description="Check system status. Returns MCP protocol status and index availability.",
             inputSchema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier",
+                    },
+                },
+                "required": ["project_id"],
             },
         ),
         Tool(
@@ -129,6 +129,10 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier",
+                    },
                     "query": {
                         "type": "string",
                         "description": "Natural language query to search memories",
@@ -144,7 +148,7 @@ async def list_tools() -> list[Tool]:
                         "description": "Filter by memory type",
                     },
                 },
-                "required": ["query"],
+                "required": ["project_id", "query"],
             },
         ),
         Tool(
@@ -153,6 +157,10 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier",
+                    },
                     "query": {
                         "type": "string",
                         "description": "Topic to search for",
@@ -167,7 +175,7 @@ async def list_tools() -> list[Tool]:
                         "default": 3,
                     },
                 },
-                "required": ["query", "session_context"],
+                "required": ["project_id", "query", "session_context"],
             },
         ),
         Tool(
@@ -176,6 +184,10 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier",
+                    },
                     "memory_type": {
                         "type": "string",
                         "enum": ["decision", "pattern", "architecture", "lesson"],
@@ -187,7 +199,7 @@ async def list_tools() -> list[Tool]:
                         "default": 10,
                     },
                 },
-                "required": ["memory_type"],
+                "required": ["project_id", "memory_type"],
             },
         ),
         Tool(
@@ -195,7 +207,13 @@ async def list_tools() -> list[Tool]:
             description="Get collection statistics: total memories and breakdown by type.",
             inputSchema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier",
+                    },
+                },
+                "required": ["project_id"],
             },
         ),
         Tool(
@@ -204,6 +222,10 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier",
+                    },
                     "content": {
                         "type": "string",
                         "description": "Full memory content/text",
@@ -224,35 +246,123 @@ async def list_tools() -> list[Tool]:
                     },
                     "source_project": {
                         "type": "string",
-                        "description": "Project name (default: secbrain)",
-                        "default": "secbrain",
+                        "description": "Project name (default: from project_id)",
                     },
                 },
-                "required": ["content", "memory_type", "title"],
+                "required": ["project_id", "content", "memory_type", "title"],
+            },
+        ),
+        Tool(
+            name="list_projects",
+            description="List all registered projects and their storage paths.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="register_project",
+            description="Register an explicit storage path for a project_id. Use after migrating or aliasing a project.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier",
+                    },
+                    "storage_path": {
+                        "type": "string",
+                        "description": "Absolute path to project storage",
+                    },
+                },
+                "required": ["project_id", "storage_path"],
+            },
+        ),
+        Tool(
+            name="unregister_project",
+            description="Remove a project registration. Storage path reverts to default BASE_DIR / project_id.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier",
+                    },
+                },
+                "required": ["project_id"],
+            },
+        ),
+        Tool(
+            name="validate_registry",
+            description="Check registry consistency. Detects orphaned stores, dangling registrations, and alias collisions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Optional project_id to validate specific entry",
+                    },
+                },
             },
         ),
     ]
 
 
+# ────────────────────────────────────────────────────────────────
+# Tool execution (fully stateless per request)
+# ────────────────────────────────────────────────────────────────
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """Handle tool calls - uses fail-fast state checks."""
-    state = _get_state()
+    """Handle tool calls - stateless routing, fresh store per request."""
 
-    if state == SystemState.FAILED:
-        return [TextContent(type="text", text="System failed. Check logs.")]
+    ctx = ProjectContext(project_id=arguments["project_id"])
 
-    if state == SystemState.STARTING:
-        return [TextContent(type="text", text="System still starting. Please wait.")]
+    store = router.resolve_store(ctx)
 
-    if state != SystemState.READY:
-        return [TextContent(type="text", text="System not ready.")]
+    # ── Registry-only tools (no store needed) ────────────────
 
-    store = get_store()
+    if name == "list_projects":
+        registry = get_registry()
+        projects = registry.list_projects()
+        if not projects:
+            return [TextContent(type="text", text="No registered projects. Using default BASE_DIR mappings.")]
+        output = ["## Registered Projects"]
+        for pid, path in projects.items():
+            output.append(f"- **{pid}** → `{path}`")
+        return [TextContent(type="text", text="\n".join(output))]
+
+    if name == "register_project":
+        registry = get_registry()
+        registry.register(
+            arguments["project_id"],
+            Path(arguments["storage_path"])
+        )
+        return [TextContent(type="text", text=f"Registered {arguments['project_id']} → {arguments['storage_path']}")]
+
+    if name == "unregister_project":
+        registry = get_registry()
+        ok = registry.unregister(arguments["project_id"])
+        if ok:
+            return [TextContent(type="text", text=f"Unregistered {arguments['project_id']}. Reverts to default path.")]
+        return [TextContent(type="text", text=f"Project {arguments['project_id']} was not explicitly registered.")]
+
+    if name == "validate_registry":
+        from secbrain.mcp.registry_validator import RegistryValidator
+        validator = RegistryValidator()
+        valid, msg = validator.validate()
+        if valid:
+            return [TextContent(type="text", text="Registry: CLEAN — all entries consistent.")]
+        return [TextContent(type="text", text=f"Registry: {msg}")]
+
+    # ── Store-dependent tools ────────────────────────────────
 
     if name == "health_check":
-        stats = store.get_stats() if _store_ready else {}
-        return [TextContent(type="text", text=f"state: {_state.name}, store: {_store_ready}, index: {stats.get('total_memories', 0)}")]
+        stats = store.get_stats()
+        return [TextContent(
+            type="text",
+            text=f"OK project={ctx.project_id}, index={stats.get('total_memories', 0)}"
+        )]
 
     if name == "query_memory":
         query = arguments["query"]
@@ -323,21 +433,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         stats = store.get_stats()
 
         output = [
-            "## secbrain Memory Stats",
+            f"## {ctx.project_id} Memory Stats",
             f"**Total memories:** {stats['total_memories']}",
             "\n**By type:**",
         ]
         for mtype, count in stats["by_type"].items():
             output.append(f"- {mtype}: {count}")
 
-        return [TextContent(type="text", text="\n".join(output))]
+        return [TextContent(type="text", text="\n\n".join(output))]
 
     elif name == "add_memory":
         content = arguments["content"]
         memory_type = arguments["memory_type"]
         title = arguments["title"]
         tags = arguments.get("tags", [])
-        source_project = arguments.get("source_project", "secbrain")
+        source_project = arguments.get("source_project", ctx.project_id)
 
         memory_id = store.add_memory(
             content=content,
@@ -352,10 +462,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
+# ────────────────────────────────────────────────────────────────
+# Server runners
+# ────────────────────────────────────────────────────────────────
+
 async def run_stdio():
-    """Run the MCP server over stdio with active store validation."""
-    # Actively validate store before accepting traffic
-    await initialize_store()
+    """Run the MCP server over stdio."""
+    print("[secbrain] starting stateless MCP server", file=sys.stderr)
 
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
@@ -365,53 +478,23 @@ async def run_stdio():
         )
 
 
-# Background watchdog task handle
-_watchdog_task: Optional[asyncio.Task] = None
-
-
-async def _watchdog_loop():
-    """Background task to monitor store health and update state accordingly."""
-    while True:
-        try:
-            if _get_state() == SystemState.READY:
-                # Re-validate periodically
-                ok = await validate_store()
-                if not ok:
-                    async with _state_lock:
-                        _set_state(SystemState.DEGRADED)
-                        _store_ready = False
-                    print("[secbrain] store degraded - health check failed", file=sys.stderr)
-        except Exception as e:
-            print(f"[secbrain] watchdog error: {e}", file=sys.stderr)
-        await asyncio.sleep(10)
-
-
 async def run_http(host: str = "0.0.0.0", port: int = 8765):
-    """Run the MCP server over HTTP/SSE with active store validation."""
-    global _watchdog_task
-
-    # Actively validate store before accepting traffic
-    await initialize_store()
-
-    # Start background watchdog
-    _watchdog_task = asyncio.create_task(_watchdog_loop())
+    """Run the MCP server over HTTP/SSE."""
+    from secbrain.mcp.http_server import StreamableHTTPSessionManager
+    import uvicorn
 
     session_manager = StreamableHTTPSessionManager(
         server,
         json_response=False,
     )
 
-    async def handle(scope: Scope, receive: Receive, send: Send) -> None:
+    async def handle(scope, receive, send) -> None:
         await session_manager.handle_request(scope, receive, send)
 
     async with session_manager.run():
         print(f"[secbrain] MCP HTTP server running on http://{host}:{port}", file=sys.stderr)
         config = uvicorn.Config(app=handle, host=host, port=port, log_level="error", lifespan="off")
         await uvicorn.Server(config).serve()
-
-    # Cleanup watchdog on shutdown
-    if _watchdog_task:
-        _watchdog_task.cancel()
 
 
 def main():
