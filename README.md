@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/secbrain.svg" style="width: 60%; height: auto;">
+  <img src="secbrain/assets/secbrain.svg" style="width: 60%; height: auto;">
 </p>
 
 <p align="center">
@@ -80,7 +80,7 @@ python -c "from secbrain import SecBrain; sb = SecBrain(); print('secbrain ready
 ## Architecture
 
 <p align="center">
-  <img src="assets/architecture.svg" style="width: 100%; height: auto;">
+  <img src="secbrain/assets/architecture.svg" style="width: 100%; height: auto;">
 </p>
 
 secbrain sits between your AI agent and a local vector store. The MCP server exposes memory operations as tools, while Ollama generates embeddings and Chroma handles storage and similarity search.

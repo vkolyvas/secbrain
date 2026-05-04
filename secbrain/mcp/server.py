@@ -9,8 +9,8 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 from pydantic import AnyUrl
 
-from ..config import DEFAULT_TOP_K
-from ..storage.chroma_store import get_store
+from secbrain.config import DEFAULT_TOP_K
+from secbrain.storage.chroma_store import get_store
 
 
 # Server instance
