@@ -164,6 +164,41 @@ secbrain stats           # Show memory stats
 secbrain list            # List all memories
 ```
 
+## How to Use
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `pip install -e .` | Install secbrain as editable package |
+| `ollama pull nomic-embed-text` | Pull the embedding model for Ollama |
+| `python -c "from secbrain import SecBrain; sb = SecBrain(); print('secbrain ready')"` | Verify installation |
+| `secbrain` | Interactive query mode |
+| `secbrain add` | Add memory via CLI |
+| `secbrain stats` | Show memory statistics |
+| `secbrain list` | List all memories |
+| `secbrain mcp` | Start MCP server (stdio transport) |
+| `secbrain mcp --transport http --host 0.0.0.0 --port 8765` | Start MCP server (HTTP/SSE transport) |
+
+### MCP Tools (via Claude Code)
+
+| Tool | Description |
+|------|-------------|
+| `secbrain_query_memory` | Semantic search across memories |
+| `secbrain_add_memory` | Store new memories |
+| `secbrain_get_memories_by_type` | Filter by memory type (decision/pattern/architecture/lesson) |
+| `secbrain_get_memory_stats` | Collection statistics |
+| `secbrain_inject_context` | Generate prompt-ready context blocks |
+
+### Memory Types
+
+| Type | Use Case |
+|------|----------|
+| `decision` | Architectural choices, tool selections |
+| `pattern` | Reusable code patterns, solutions |
+| `architecture` | System design, component relationships |
+| `lesson` | Hard-won insights, gotchas |
+
 ---
 
 ## MCP Server
