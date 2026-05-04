@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+.env.local
+chroma/
 *.egg-info/
 .eggs/
 dist/
