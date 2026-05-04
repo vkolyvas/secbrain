@@ -8,6 +8,7 @@ Each request carries project_id. Store is resolved per-request via registry.
 """
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,15 @@ class ProjectContext(BaseModel):
     """Every request MUST carry explicit project context."""
     project_id: str
 
+    def __init__(self, **data):
+        # Auto-detect project_id if "auto" or empty
+        if not data.get("project_id") or data.get("project_id") == "auto":
+            resolver = ProjectResolver()
+            detected = resolver.detect_project_id()
+            if detected:
+                data["project_id"] = detected
+        super().__init__(**data)
+
 
 # ────────────────────────────────────────────────────────────────
 # Project Resolver (uses registry for decoupled identity)
@@ -40,18 +50,48 @@ class ProjectResolver:
     Resolves project_id to filesystem path via registry.
     Registry is sole source of truth — no fallback.
     Unregistered project_ids fail explicitly.
+
+    Supports auto-detection from Claude Code working directory.
     """
 
     BASE_DIR = Path.home() / ".claude" / "projects"
 
+    # Claude Code sets CLAUDE_PROJECT_ROOT or PROJECT_ROOT env vars
+    CANDIDATE_ENV_VARS = ["CLAUDE_PROJECT_ROOT", "PROJECT_ROOT", "CLAUDE_DIR"]
+
     def __init__(self):
         self.registry: ProjectRegistry = get_registry()
 
-    def resolve(self, ctx: ProjectContext) -> Path:
-        path = self.registry.resolve(ctx.project_id)
-        if path is None:
-            raise ValueError(f"Unregistered project_id: {ctx.project_id}. Register with register_project() first.")
-        return path
+    def resolve(self, ctx: ProjectContext) -> Optional[Path]:
+        """
+        Resolve project_id to storage path.
+        READ ONLY — never mutates registry state.
+
+        Returns Path if registered, None if not registered.
+        Callers must handle None explicitly.
+        """
+        return self.registry.resolve(ctx.project_id)
+
+    def detect_project_id(self) -> str:
+        """
+        Infer project_id from Claude Code working directory.
+        Returns the basename of the detected project root.
+        """
+        for env_var in self.CANDIDATE_ENV_VARS:
+            val = os.environ.get(env_var)
+            if val:
+                return Path(val).name
+
+        # Fallback: use cwd if inside .claude/projects
+        try:
+            cwd = Path.cwd()
+            projects_base = self.BASE_DIR.resolve()
+            if projects_base in cwd.parents or projects_base == cwd:
+                return cwd.name
+        except Exception:
+            pass
+
+        return ""
 
 
 # ────────────────────────────────────────────────────────────────
@@ -89,7 +129,13 @@ class MCPRouter:
         self.factory = StoreFactory()
 
     def resolve_store(self, ctx: ProjectContext):
+        """
+        Resolve project_id to store. Returns None if not registered.
+        READ ONLY — no state mutation.
+        """
         project_path = self.resolver.resolve(ctx)
+        if project_path is None:
+            return None
         return self.factory.create(project_path)
 
 
@@ -305,6 +351,20 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="bootstrap_project",
+            description="Initialize a project if not already registered. Creates registry entry with default storage path. Does not auto-detect — explicit initialization only.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier to bootstrap",
+                    },
+                },
+                "required": ["project_id"],
+            },
+        ),
     ]
 
 
@@ -347,6 +407,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=f"Unregistered {arguments['project_id']}. Reverts to default path.")]
         return [TextContent(type="text", text=f"Project {arguments['project_id']} was not explicitly registered.")]
 
+    if name == "bootstrap_project":
+        registry = get_registry()
+        project_id = arguments["project_id"]
+        if registry.is_registered(project_id):
+            path = registry.resolve(project_id)
+            return [TextContent(type="text", text=f"Project {project_id} already registered → {path}")]
+        # Register with default path if not present
+        base_dir = Path.home() / ".claude" / "projects" / project_id
+        registry.register(project_id, base_dir)
+        return [TextContent(type="text", text=f"Bootstrapped {project_id} → {base_dir} (created if needed)")]
+
     if name == "validate_registry":
         from secbrain.mcp.registry_validator import RegistryValidator
         validator = RegistryValidator()
@@ -356,6 +427,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=f"Registry: {msg}")]
 
     # ── Store-dependent tools ────────────────────────────────
+
+    # Handle unregistered project_id gracefully
+    store = router.resolve_store(ctx)
+    if store is None:
+        return [TextContent(
+            type="text",
+            text=f"Project {ctx.project_id} is not registered. Use bootstrap_project() or register_project() first."
+        )]
 
     if name == "health_check":
         stats = store.get_stats()
