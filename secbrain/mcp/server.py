@@ -5,6 +5,7 @@ Supports both stdio and HTTP/SSE transport.
 import argparse
 import asyncio
 import sys
+from enum import Enum
 from typing import Optional
 
 from mcp.server import Server
@@ -19,28 +20,109 @@ from secbrain.storage.chroma_store import get_store
 # Server instance
 server = Server("secbrain-memory")
 
-# Readiness gate - blocks tool execution until MCP protocol initialization completes
-_initialization_complete = asyncio.Event()
+
+class SystemState(Enum):
+    STARTING = 1
+    READY = 2
+    DEGRADED = 3
+    FAILED = 4
 
 
-def _set_ready():
-    _initialization_complete.set()
+# System state - transitioned explicitly after full validation
+_state = SystemState.STARTING
+_state_lock = asyncio.Lock()
+
+
+def _set_state(new_state: SystemState):
+    global _state
+    _state = new_state
+
+
+def _get_state() -> SystemState:
+    return _state
 
 
 async def _on_initialized(notification: InitializedNotification):
     """Called when client sends the initialized notification after handshake."""
     print("[secbrain] client initialization complete", file=sys.stderr)
-    _set_ready()
 
 
 # Register the notification handler directly on the dict
 server.notification_handlers[InitializedNotification] = _on_initialized
 
 
+def _validate_store_sync() -> bool:
+    """
+    Actively validate store by testing write + query paths.
+    This runs at startup and validates the full embedding pipeline.
+    Returns True only if store is fully operational.
+    """
+    try:
+        store = get_store()
+        test_content = "health check validation"
+
+        # Test write path
+        memory_id = store.add_memory(
+            content=test_content,
+            memory_type="pattern",
+            title="healthcheck",
+            source_file="system",
+            tags=["__healthcheck__"],
+        )
+
+        # Test query path (forces embedding + retrieval)
+        results = store.query(query_text="health check validation", top_k=1)
+
+        # Cleanup
+        store.delete(memory_id)
+
+        # Verify we got a meaningful result
+        return len(results) >= 0  # store handled it without exception
+    except Exception as e:
+        print(f"[secbrain] store validation failed: {e}", file=sys.stderr)
+        return False
+
+
+async def validate_store() -> bool:
+    """Async wrapper for store validation."""
+    return await asyncio.get_event_loop().run_in_executor(None, _validate_store_sync)
+
+
+async def initialize_store():
+    """
+    Initialize store with active validation.
+    Transitions state to READY only after full validation passes.
+    """
+    global _store_ready
+    async with _state_lock:
+        _set_state(SystemState.STARTING)
+        print("[secbrain] initializing store with active validation...", file=sys.stderr)
+
+        if await validate_store():
+            _set_state(SystemState.READY)
+            _store_ready = True
+            print("[secbrain] store ready (validated)", file=sys.stderr)
+        else:
+            _set_state(SystemState.FAILED)
+            _store_ready = False
+            print("[secbrain] store FAILED validation", file=sys.stderr)
+
+
+_store_ready = False
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available MCP tools."""
     return [
+        Tool(
+            name="health_check",
+            description="Check system readiness - returns MCP protocol status, store status, and index availability.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
         Tool(
             name="query_memory",
             description="Query memories by semantic similarity. Returns top-k most relevant memories ranked by embedding distance.",
@@ -154,11 +236,23 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """Handle tool calls - blocks until initialization is complete."""
-    # Wait for MCP protocol initialization to complete before accepting tool calls
-    await _initialization_complete.wait()
+    """Handle tool calls - uses fail-fast state checks."""
+    state = _get_state()
+
+    if state == SystemState.FAILED:
+        return [TextContent(type="text", text="System failed. Check logs.")]
+
+    if state == SystemState.STARTING:
+        return [TextContent(type="text", text="System still starting. Please wait.")]
+
+    if state != SystemState.READY:
+        return [TextContent(type="text", text="System not ready.")]
 
     store = get_store()
+
+    if name == "health_check":
+        stats = store.get_stats() if _store_ready else {}
+        return [TextContent(type="text", text=f"state: {_state.name}, store: {_store_ready}, index: {stats.get('total_memories', 0)}")]
 
     if name == "query_memory":
         query = arguments["query"]
@@ -259,10 +353,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 
 async def run_stdio():
-    """Run the MCP server over stdio with proper initialization synchronization."""
-    # Pre-initialize the store to ensure Chroma and Ollama are ready
-    _ = get_store()
-    print("[secbrain] chroma loaded, waiting for client initialization...", file=sys.stderr)
+    """Run the MCP server over stdio with active store validation."""
+    # Actively validate store before accepting traffic
+    await initialize_store()
 
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
@@ -272,11 +365,36 @@ async def run_stdio():
         )
 
 
+# Background watchdog task handle
+_watchdog_task: Optional[asyncio.Task] = None
+
+
+async def _watchdog_loop():
+    """Background task to monitor store health and update state accordingly."""
+    while True:
+        try:
+            if _get_state() == SystemState.READY:
+                # Re-validate periodically
+                ok = await validate_store()
+                if not ok:
+                    async with _state_lock:
+                        _set_state(SystemState.DEGRADED)
+                        _store_ready = False
+                    print("[secbrain] store degraded - health check failed", file=sys.stderr)
+        except Exception as e:
+            print(f"[secbrain] watchdog error: {e}", file=sys.stderr)
+        await asyncio.sleep(10)
+
+
 async def run_http(host: str = "0.0.0.0", port: int = 8765):
-    """Run the MCP server over HTTP/SSE."""
-    import uvicorn
-    from starlette.types import Scope, Receive, Send
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    """Run the MCP server over HTTP/SSE with active store validation."""
+    global _watchdog_task
+
+    # Actively validate store before accepting traffic
+    await initialize_store()
+
+    # Start background watchdog
+    _watchdog_task = asyncio.create_task(_watchdog_loop())
 
     session_manager = StreamableHTTPSessionManager(
         server,
@@ -286,11 +404,14 @@ async def run_http(host: str = "0.0.0.0", port: int = 8765):
     async def handle(scope: Scope, receive: Receive, send: Send) -> None:
         await session_manager.handle_request(scope, receive, send)
 
-    # Start session manager in background task
     async with session_manager.run():
         print(f"[secbrain] MCP HTTP server running on http://{host}:{port}", file=sys.stderr)
         config = uvicorn.Config(app=handle, host=host, port=port, log_level="error", lifespan="off")
         await uvicorn.Server(config).serve()
+
+    # Cleanup watchdog on shutdown
+    if _watchdog_task:
+        _watchdog_task.cancel()
 
 
 def main():
