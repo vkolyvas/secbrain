@@ -4,13 +4,13 @@ Supports both stdio and HTTP/SSE transport.
 """
 import argparse
 import asyncio
+import sys
 from typing import Optional
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent
-import sys
+from mcp.types import Tool, TextContent, InitializedNotification
 
 from secbrain.config import DEFAULT_TOP_K
 from secbrain.storage.chroma_store import get_store
@@ -18,6 +18,23 @@ from secbrain.storage.chroma_store import get_store
 
 # Server instance
 server = Server("secbrain-memory")
+
+# Readiness gate - blocks tool execution until MCP protocol initialization completes
+_initialization_complete = asyncio.Event()
+
+
+def _set_ready():
+    _initialization_complete.set()
+
+
+async def _on_initialized(notification: InitializedNotification):
+    """Called when client sends the initialized notification after handshake."""
+    print("[secbrain] client initialization complete", file=sys.stderr)
+    _set_ready()
+
+
+# Register the notification handler directly on the dict
+server.notification_handlers[InitializedNotification] = _on_initialized
 
 
 @server.list_tools()
@@ -137,7 +154,10 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """Handle tool calls."""
+    """Handle tool calls - blocks until initialization is complete."""
+    # Wait for MCP protocol initialization to complete before accepting tool calls
+    await _initialization_complete.wait()
+
     store = get_store()
 
     if name == "query_memory":
@@ -239,7 +259,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 
 async def run_stdio():
-    """Run the MCP server over stdio."""
+    """Run the MCP server over stdio with proper initialization synchronization."""
+    # Pre-initialize the store to ensure Chroma and Ollama are ready
+    _ = get_store()
+    print("[secbrain] chroma loaded, waiting for client initialization...", file=sys.stderr)
+
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
@@ -264,7 +288,7 @@ async def run_http(host: str = "0.0.0.0", port: int = 8765):
 
     # Start session manager in background task
     async with session_manager.run():
-        print(f"MCP HTTP server running on http://{host}:{port}", file=sys.stderr)
+        print(f"[secbrain] MCP HTTP server running on http://{host}:{port}", file=sys.stderr)
         config = uvicorn.Config(app=handle, host=host, port=port, log_level="error", lifespan="off")
         await uvicorn.Server(config).serve()
 
@@ -295,5 +319,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import sys
     main()
