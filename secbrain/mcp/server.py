@@ -1,13 +1,16 @@
 """
-MCP stdio server for secbrain memory retrieval.
+MCP server for secbrain memory retrieval.
+Supports both stdio and HTTP/SSE transport.
 """
-import sys
+import argparse
+import asyncio
 from typing import Optional
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
+from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent
-from pydantic import AnyUrl
+import sys
 
 from secbrain.config import DEFAULT_TOP_K
 from secbrain.storage.chroma_store import get_store
@@ -235,8 +238,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
-async def main():
-    """Run the MCP server."""
+async def run_stdio():
+    """Run the MCP server over stdio."""
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
@@ -245,6 +248,52 @@ async def main():
         )
 
 
+async def run_http(host: str = "0.0.0.0", port: int = 8765):
+    """Run the MCP server over HTTP/SSE."""
+    import uvicorn
+    from starlette.types import Scope, Receive, Send
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    session_manager = StreamableHTTPSessionManager(
+        server,
+        json_response=False,
+    )
+
+    async def handle(scope: Scope, receive: Receive, send: Send) -> None:
+        await session_manager.handle_request(scope, receive, send)
+
+    # Start session manager in background task
+    async with session_manager.run():
+        print(f"MCP HTTP server running on http://{host}:{port}", file=sys.stderr)
+        config = uvicorn.Config(app=handle, host=host, port=port, log_level="error", lifespan="off")
+        await uvicorn.Server(config).serve()
+
+
+def main():
+    """Run the MCP server."""
+    parser = argparse.ArgumentParser(description="secbrain MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default="stdio",
+        help="Transport to use (default: stdio)",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind to for HTTP transport (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=8765, help="Port to bind to for HTTP transport (default: 8765)"
+    )
+    args = parser.parse_args()
+
+    if args.transport == "http":
+        asyncio.run(run_http(args.host, args.port))
+    else:
+        asyncio.run(run_stdio())
+
+
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    import sys
+    main()
