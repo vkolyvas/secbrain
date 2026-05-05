@@ -385,11 +385,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "list_projects":
         registry = get_registry()
         projects = registry.list_projects()
+        warnings = registry.get_warnings()
         if not projects:
-            return [TextContent(type="text", text="No registered projects. Using default BASE_DIR mappings.")]
+            return [TextContent(type="text", text="No registered projects.")]
         output = ["## Registered Projects"]
-        for pid, path in projects.items():
-            output.append(f"- **{pid}** → `{path}`")
+        for pid, info in projects.items():
+            policy = info["storage_policy"]
+            emoji = "⚠️" if policy == "ephemeral" else "✓"
+            output.append(f"- **{pid}** → `{info['path']}` {emoji} {policy}")
+        if warnings:
+            output.append("\n### Warnings")
+            for w in warnings:
+                output.append(f"- {w}")
         return [TextContent(type="text", text="\n".join(output))]
 
     if name == "register_project":
@@ -412,11 +419,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         project_id = arguments["project_id"]
         if registry.is_registered(project_id):
             path = registry.resolve(project_id)
-            return [TextContent(type="text", text=f"Project {project_id} already registered → {path}")]
+            policy = registry.get_storage_policy(project_id)
+            return [TextContent(type="text", text=f"Project {project_id} already registered → {path} ({policy})")]
         # Register with default path if not present
         base_dir = Path.home() / ".claude" / "projects" / project_id
         registry.register(project_id, base_dir)
-        return [TextContent(type="text", text=f"Bootstrapped {project_id} → {base_dir} (created if needed)")]
+        policy = registry.get_storage_policy(project_id)
+        return [TextContent(type="text", text=f"Bootstrapped {project_id} → {base_dir} ({policy})")]
 
     if name == "validate_registry":
         from secbrain.mcp.registry_validator import RegistryValidator
