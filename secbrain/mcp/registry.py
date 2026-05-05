@@ -74,7 +74,7 @@ class ProjectRegistry:
         elif isinstance(entry, dict):
             # New schema: "project_id": {"path": "...", "storage_policy": "..."}
             path = Path(entry.get("path", ""))
-            policy = entry.get("storage_policy", "ephemeral")
+            policy = entry.get("storage_policy", "persistent")
             return path, policy
         else:
             raise ValueError(f"Invalid registry entry type for {entry}")
