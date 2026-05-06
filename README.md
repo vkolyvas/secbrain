@@ -239,3 +239,7 @@ Built with:
 - [Chroma](https://github.com/chroma-core/chroma) — vector database
 - [Ollama](https://ollama.ai/) — local LLM inference
 - [MCP](https://modelcontextprotocol.io/) — model context protocol
+---
+<p align="center">
+  <img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="MIT License">
+</p>
