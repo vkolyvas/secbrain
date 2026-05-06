@@ -13,6 +13,7 @@
 <p align="center">
   <a href="https://www.linkedin.com/in/vasiliskolyvasmsc" target="_blank"><img src="https://img.shields.io/badge/LinkedIn-Vasilis%20Kolyvas-0077b5?logo=linkedin&style=for-the-badge" alt="LinkedIn"></a>
   <a href="https://github.com/onchain3r/secbrain" target="_blank"><img src="https://img.shields.io/badge/GitHub-secbrain-14C290?logo=github&style=for-the-badge" alt="GitHub"></a>
+  <img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="MIT License">
 </p>
 
 <p align="center">
@@ -239,7 +240,3 @@ Built with:
 - [Chroma](https://github.com/chroma-core/chroma) — vector database
 - [Ollama](https://ollama.ai/) — local LLM inference
 - [MCP](https://modelcontextprotocol.io/) — model context protocol
----
-<p align="center">
-  <img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="MIT License">
-</p>
