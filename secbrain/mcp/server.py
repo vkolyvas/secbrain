@@ -365,6 +365,24 @@ async def list_tools() -> list[Tool]:
                 "required": ["project_id"],
             },
         ),
+        Tool(
+            name="delete_memory",
+            description="Delete a memory by ID. Use query_memory first to find the memory ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier",
+                    },
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the memory to delete",
+                    },
+                },
+                "required": ["project_id", "memory_id"],
+            },
+        ),
     ]
 
 
@@ -546,6 +564,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         )
 
         return [TextContent(type="text", text=f"Memory added successfully. ID: {memory_id}")]
+
+    elif name == "delete_memory":
+        memory_id = arguments["memory_id"]
+        ok = store.delete(memory_id)
+        if ok:
+            return [TextContent(type="text", text=f"Memory {memory_id} deleted.")]
+        return [TextContent(type="text", text=f"Failed to delete memory {memory_id}.")]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
