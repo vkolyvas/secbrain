@@ -240,3 +240,4 @@ Built with:
 - [Chroma](https://github.com/chroma-core/chroma) — vector database
 - [Ollama](https://ollama.ai/) — local LLM inference
 - [MCP](https://modelcontextprotocol.io/) — model context protocol
+# test
