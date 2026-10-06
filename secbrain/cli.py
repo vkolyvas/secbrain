@@ -42,6 +42,12 @@ def main():
     mcp_install_parser.add_argument("--global", dest="global_mcp", action="store_true", help="Install globally (default)")
     mcp_install_parser.add_argument("--project", dest="project_path", type=str, help="Install in project directory")
 
+    # Import ChatGPT command
+    import_chatgpt_parser = subparsers.add_parser("import-chatgpt", help="Import ChatGPT export into secbrain")
+    import_chatgpt_parser.add_argument("file", type=str, help="Path to ChatGPT export JSON file")
+    import_chatgpt_parser.add_argument("--project", dest="project_id", type=str, default="chatgpt", help="Target project ID (default: chatgpt)")
+    import_chatgpt_parser.add_argument("--dry-run", action="store_true", help="Show what would be imported without storing")
+
     args = parser.parse_args()
 
     if args.command == "mcp":
@@ -133,6 +139,65 @@ def main():
             print(f"[secbrain] MCP installed globally to {mcp_path}")
 
         print("[secbrain] Restart Claude Code for changes to take effect.")
+
+    elif args.command == "import-chatgpt":
+        from pathlib import Path
+        from secbrain.ingestion.chatgpt_parser import ChatGPTParser
+        from secbrain.mcp.registry import get_registry
+        from secbrain.storage.chroma_store import ChromaStore
+        from secbrain.config import COLLECTION_NAME
+
+        export_path = Path(args.file)
+        if not export_path.exists():
+            print(f"[secbrain] Error: File not found: {export_path}")
+            return 1
+
+        project_id = args.project_id
+        registry = get_registry()
+
+        # Resolve or bootstrap project storage path
+        project_path = registry.resolve(project_id)
+        if project_path is None:
+            # Auto-bootstrap: create project in managed storage
+            project_path = Path.home() / ".claude" / "projects" / project_id
+            registry.register(project_id, project_path)
+            print(f"[secbrain] Auto-registered project: {project_id} -> {project_path}")
+
+        print(f"[secbrain] Importing ChatGPT export from: {export_path}")
+        print(f"[secbrain] Target project: {project_id} ({project_path})")
+
+        # Parse the export
+        parser = ChatGPTParser(export_path)
+        conversations = parser.load_conversations(export_path)
+        print(f"[secbrain] Found {len(conversations)} conversations")
+
+        # Create project-scoped store
+        chroma_path = project_path / "chroma"
+        store = ChromaStore(path=chroma_path, collection_name=COLLECTION_NAME)
+
+        total_memories = 0
+        for conv in conversations:
+            memories = parser.extract_memories_from_conversation(conv)
+            if args.dry_run:
+                for m in memories:
+                    print(f"  [DRY-RUN] Would store: {m['title'][:60]}...")
+            else:
+                for m in memories:
+                    store.add_memory(
+                        content=m["content"],
+                        memory_type=m["memory_type"],
+                        title=m["title"],
+                        source_file=m["source_file"],
+                        source_project=project_id,
+                        tags=m.get("tags", []),
+                        session_id=m["session_id"],
+                    )
+                    total_memories += 1
+
+        if args.dry_run:
+            print(f"[secbrain] Dry run complete. Would have imported {total_memories} memories.")
+        else:
+            print(f"[secbrain] Successfully imported {total_memories} memories into {project_id}")
 
 
 if __name__ == "__main__":
